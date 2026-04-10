@@ -1,6 +1,6 @@
 import streamlit as st
 import anthropic
-import google.generativeai as genai
+from google import genai
 from openai import OpenAI
 
 from motor_rag import MotorRAG
@@ -124,13 +124,22 @@ if prompt := st.chat_input():
                 resposta = response.content[0].text
 
             else:
-                genai.configure(api_key=llm_api_key)
+                client = genai.Client(api_key=llm_api_key)
                 sys_msg = f"{SYSTEM_PROMPT}\n\nCONTEXTO:\n{contexto}"
-                model = genai.GenerativeModel(model_name=modelo_llm, system_instruction=sys_msg)
                 
-                hist = [{"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]} for m in mensagens_historico[:-1]]
-                chat = model.start_chat(history=hist)
-                response = chat.send_message(prompt, generation_config=genai.types.GenerationConfig(temperature=0.3))
+                # Para simplificar usando o novo genai sem construir types.Content manualmente,
+                # concatenamos o histórico de forma explícita.
+                prompt_completo = f"{sys_msg}\n\n--- HISTÓRICO DA CONVERSA ---\n"
+                for msg in mensagens_historico[:-1]:
+                    prompt_completo += f"{msg['role'].upper()}: {msg['content']}\n"
+                
+                prompt_completo += f"\nUsuário: {prompt}\nSua Resposta:"
+                
+                response = client.models.generate_content(
+                    model=modelo_llm,
+                    contents=prompt_completo,
+                    config={"temperature": 0.3}
+                )
                 resposta = response.text
 
             st.write(resposta)

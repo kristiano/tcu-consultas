@@ -90,10 +90,12 @@ class MotorRAG:
             try:
                 # Tentar UTF-8, cair para latin1 se falhar
                 try:
-                    df = pd.read_csv(csv_file, encoding="utf-8", dtype=str)
+                    df = pd.read_csv(csv_file, encoding="utf-8", dtype=str, on_bad_lines="warn")
                 except UnicodeDecodeError:
-                    df = pd.read_csv(csv_file, encoding="latin1", dtype=str)
-                
+                    df = pd.read_csv(csv_file, encoding="latin1", dtype=str, on_bad_lines="warn")
+                except Exception:
+                    df = pd.read_csv(csv_file, encoding="utf-8", dtype=str, on_bad_lines="skip")
+                    
                 df = df.fillna("")
                 
                 # Normalizar colunas do Kaggle/Tcu dataset para os nomes internos
