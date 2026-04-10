@@ -3,6 +3,7 @@ openai>=1.2
 anthropic>=0.3.0
 google-generativeai
 sentence-transformers
+--extra-index-url https://download.pytorch.org/whl/cpu
 torch
 pandas
 faiss-cpu

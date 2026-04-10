@@ -72,16 +72,18 @@ class MotorRAG:
         """
         dfs = []
         dir_path = Path(diretorio)
+        csv_files = []
 
-        if not dir_path.exists():
-            raise FileNotFoundError(
-                f"Diretório '{diretorio}' não encontrado."
-            )
+        if dir_path.exists():
+            csv_files = list(dir_path.glob("*.csv"))
 
-        csv_files = list(dir_path.glob("*.csv"))
+        # Se não achou na pasta data, tenta na pasta raiz
+        if not csv_files:
+            csv_files = list(Path(".").glob("*.csv"))
+
         if not csv_files:
             raise FileNotFoundError(
-                f"Nenhum arquivo CSV encontrado em '{diretorio}'."
+                f"Nenhum arquivo CSV encontrado na pasta '{diretorio}' ou na raiz do projeto."
             )
 
         for csv_file in csv_files:

@@ -57,7 +57,7 @@ def inicializar_rag():
 motor = inicializar_rag()
 
 if not motor:
-    st.error("RAG não inicializado. Verifique se os arquivos `.csv` estão na pasta `data/`.")
+    st.error("RAG não inicializado. Não foi possível encontrar a base de acórdãos.")
     st.stop()
 
 if "messages" not in st.session_state:
