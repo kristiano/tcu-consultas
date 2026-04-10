@@ -1,0 +1,11 @@
+streamlit>=1.28
+openai>=1.2
+anthropic>=0.3.0
+google-generativeai
+sentence-transformers
+torch
+pandas
+faiss-cpu
+tiktoken
+numpy
+requests
