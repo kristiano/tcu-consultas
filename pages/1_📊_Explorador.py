@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from pathlib import Path
-from motor_rag import MotorRAG
+from motor_rag import ReasonerRAG
 
 st.set_page_config(page_title="Explorador de Dados", page_icon="📊", layout="wide")
 
@@ -10,12 +10,14 @@ st.caption("Filtre, analise e exporte os dados indexados pelo sistema.")
 
 @st.cache_data(show_spinner=False)
 def carregar_dados():
-    motor = MotorRAG()
+    motor = ReasonerRAG()
     try:
-        motor.inicializar()
-        if motor.documentos:
-            # Extrair os metadados dos documentos (ignorando o chunk inteiro pra UI ficar leve)
-            metas = [doc["metadados"] for doc in motor.documentos]
+        if motor.catalogo:
+            # Transforma o dict de chaves em uma lista para o Pandas
+            metas = list(motor.catalogo.values())
+            # Adicionamos as chaves como uma coluna caso queiram ver (ex: "815/2026")
+            for k, v in motor.catalogo.items():
+                v['chave'] = k
             return pd.DataFrame(metas)
         return pd.DataFrame()
     except Exception as e:
