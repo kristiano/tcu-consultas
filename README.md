@@ -11,7 +11,7 @@ Este aplicativo foi construído com a biblioteca [Streamlit](https://streamlit.i
     *   **Google Gemini** (Modelos 1.5 Flash e 1.5 Pro)
 *   **🔍 Indexação 100% Local e Gratuita:** A fase de embeddings (vetorização dos textos longos) é feita utilizando modelos `sentence-transformers` direto na sua máquina CPU/GPU usando FAISS. Isso significa que **não há custos de tokens** para indexar a base de dados.
 *   **📊 Explorador de Dados:** Uma interface separada voltada puramente para analisar métricas, tabelas estatísticas, ler os acórdãos inteiros e filtrar tudo (páginas laterais).
-*   **📥 Coletor e Upload:** Possui tanto scripts de terminal automáticos para baixar novos acórdãos direto da API Pública do TCU, ou opções flexíveis para você fazer o drag-and-drop dos seus arquivos `.csv`.
+
 
 ---
 
@@ -31,14 +31,8 @@ pip install -r requirements.txt
 
 ### 3. Base de Dados (CSVs)
 O aplicativo espera que seus dados estejam na pasta **`data/`**.
-Temos três opções para você obter os dados:
-1. **Através do Coletor (API TCU):** 
-   Rode no terminal para extrair 500 acórdãos oficiais na hora: 
-   `python coletar_acordaos.py --quantidade 500`
-2. **Kaggle Dataset / Seus arquivos locais:**
-   Coloque o arquivo `total-tcu.csv` (ou qualquer outro com as mesmas colunas) diretamente na subpasta `data/`.
-3. **Upload Visual:**
-   Inicie o aplicativo e acesse a página "📤 Upload de Dados" na aba lateral para largar seu arquivo na janela.
+Para carregar os dados:
+Coloque o arquivo `total-tcu.csv` (ou qualquer outro com as mesmas colunas) diretamente na subpasta `data/`.
 
 ### 4. Executar o aplicativo
 Após certificar-se que há pelo menos um `.csv` com dados na pasta correta, execute o Streamlit:
@@ -53,7 +47,6 @@ Cole sua *API Key* do provedor escolhido na barra lateral e comece a pesquisar.
 ## 📁 Estrutura do Projeto
 - `app.py`: O código principal da interface e gerador de chat LLM.
 - `motor_rag.py`: Lógica do sistema semântico, leitura de dataset e processador RAG com `FAISS`.
-- `coletar_acordaos.py`: Script autônomo para baixar informações brutas da API oficial do TCU.
 - `requirements.txt`: Todas as bibliotecas Python instaladas para rodar o app.
 - `data/`: Onde ficam os arquivos em lote (`.csv`) com as bases analíticas.
 - `pages/`: Aplicações e visualizações adicionais para explorar ou interagir com o sistema RAG Streamlit.

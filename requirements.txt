@@ -11,3 +11,4 @@ faiss-cpu
 tiktoken
 numpy
 requests
+firebase-admin

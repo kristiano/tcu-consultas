@@ -18,8 +18,10 @@ import faiss
 import numpy as np
 import pandas as pd
 import tiktoken
+import streamlit as st
 from sentence_transformers import SentenceTransformer
-
+import firebase_admin
+from firebase_admin import credentials, storage
 
 # ─── Configurações ────────────────────────────────────────────────────────────
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
@@ -63,6 +65,44 @@ class MotorRAG:
         if self._embedding_model is None:
             self._embedding_model = SentenceTransformer(EMBEDDING_MODEL)
         return self._embedding_model
+
+    # ─── Firebase Storage ─────────────────────────────────────────────────
+    
+    def baixar_do_firebase(self):
+        """Baixa os índices pré-computados (.faiss e .pkl) se configurados no Streamlit Secrets"""
+        if "firebase" not in st.secrets:
+            return False
+            
+        print("🔗 Conectando ao Firebase Storage...")
+        
+        try:
+            # Inicializar firebase_admin se ainda não existir
+            if not firebase_admin._apps:
+                firebase_cred = dict(st.secrets["firebase"])
+                # Arrumar a formatação da private key no json
+                if "private_key" in firebase_cred:
+                    firebase_cred["private_key"] = firebase_cred["private_key"].replace('\\n', '\n')
+                
+                cred = credentials.Certificate(firebase_cred)
+                bucket_name = st.secrets.get("FIREBASE_BUCKET_NAME", "")
+                firebase_admin.initialize_app(cred, {'storageBucket': bucket_name})
+            
+            bucket = storage.bucket()
+            
+            for f_name in ["tcu_base.faiss", "tcu_meta.pkl"]:
+                blob = bucket.blob(f_name)
+                if blob.exists():
+                    local_path = CACHE_DIR / f_name
+                    print(f"⬇️ Baixando {f_name} do Firebase...")
+                    blob.download_to_filename(str(local_path))
+                else:
+                    return False
+            
+            return True
+            
+        except Exception as e:
+            print(f"⚠️ Aviso ignorado: Falha no Firebase -> {e}")
+            return False
 
     # ─── Carregamento de dados ────────────────────────────────────────────
 
@@ -231,65 +271,72 @@ class MotorRAG:
 
     # ─── Indexação FAISS ──────────────────────────────────────────────────
 
-    def construir_indice(
-        self, documentos: Optional[list[dict]] = None, usar_cache: bool = True
-    ) -> None:
+    def carregar_indice_pronto(self) -> bool:
+        """Tenta abrir um FAISS index e um PKL de metadados se já estiverem na pasta."""
+        faiss_path = CACHE_DIR / "tcu_base.faiss"
+        pkl_path = CACHE_DIR / "tcu_meta.pkl"
+        
+        # Tenta baixar da nuvem primeiro caso configurado, e se ainda não existe
+        if not faiss_path.exists() or not pkl_path.exists():
+            self.baixar_do_firebase()
+            
+        if faiss_path.exists() and pkl_path.exists():
+            print("📦 Carregando Base Otimizada do Disco (Offline/Firebase)")
+            self.index = faiss.read_index(str(faiss_path))
+            with open(pkl_path, "rb") as f:
+                self.documentos = pickle.load(f)
+            return True
+            
+        return False
+
+    def inicializar(self) -> int:
         """
-        Constrói o índice FAISS a partir dos documentos.
-        Usa cache para evitar recálculo de embeddings desnecessário.
+        Inicia a base.
+        Ordem de tentativa:
+        1. Base Offline / Firebase (.faiss e .pkl) prontas.
+        2. Ler CSV localmente caso .faiss não exista.
         """
-        if documentos:
-            self.documentos = documentos
+        if self.carregar_indice_pronto():
+            return len(self.documentos)
+            
+        print("📁 Base pronta não encontrada. Buscando arquivos '.csv' para fallback...")
+        df = self.carregar_csvs()
+        
+        # Gera o hash baseado no dataframe atual
+        hash_atual = hashlib.md5(pd.util.hash_pandas_object(df).values).hexdigest()
+        arquivo_index = CACHE_DIR / f"base_{hash_atual}.index"
+        arquivo_docs = CACHE_DIR / f"base_{hash_atual}.pkl"
 
-        if not self.documentos:
-            raise ValueError("Nenhum documento carregado para indexação.")
+        if arquivo_index.exists() and arquivo_docs.exists():
+            print("📦 Carregando Base do Cache Antigo de CSV")
+            self.index = faiss.read_index(str(arquivo_index))
+            with open(arquivo_docs, "rb") as f:
+                self.documentos = pickle.load(f)
+        else:
+            print(f"Processando {len(df)} linha(s). Isso pode ser muito lento para big data na nuvem.")
+            self.documentos = self.preparar_documentos(df)
+            
+            textos_para_vetorizar = [doc["texto"] for doc in self.documentos]
+            vetores = self.gerar_embeddings(textos_para_vetorizar)
 
-        # Verificar cache
-        cache_path = CACHE_DIR / "faiss_index.pkl"
-        docs_hash = hashlib.md5(
-            str([d["texto"][:100] for d in self.documentos]).encode()
-        ).hexdigest()
-        hash_path = CACHE_DIR / "docs_hash.txt"
+            self.index = faiss.IndexFlatL2(EMBEDDING_DIM)
+            self.index.add(vetores)
 
-        if usar_cache and cache_path.exists() and hash_path.exists():
-            hash_salvo = hash_path.read_text().strip()
-            if hash_salvo == docs_hash:
-                with open(cache_path, "rb") as f:
-                    cache = pickle.load(f)
-                self.index = cache["index"]
-                self.documentos = cache["documentos"]
-                return
+            # Salvar cache
+            faiss.write_index(self.index, str(arquivo_index))
+            with open(arquivo_docs, "wb") as f:
+                pickle.dump(self.documentos, f)
 
-        # Gerar embeddings
-        textos = [d["texto"] for d in self.documentos]
-        embeddings = self.gerar_embeddings(textos)
-
-        # Construir índice L2
-        self.index = faiss.IndexFlatL2(EMBEDDING_DIM)
-        self.index.add(embeddings)
-
-        # Salvar cache
-        with open(cache_path, "wb") as f:
-            pickle.dump(
-                {"index": self.index, "documentos": self.documentos}, f
-            )
-        hash_path.write_text(docs_hash)
+        return len(self.documentos)
 
     # ─── Busca semântica ──────────────────────────────────────────────────
 
     def buscar(self, consulta: str, top_k: int = 5) -> list[dict]:
         """
         Realiza busca semântica no índice FAISS.
-
-        Args:
-            consulta: Texto da consulta do usuário
-            top_k: Número de resultados mais relevantes
-
-        Returns:
-            Lista de documentos relevantes com score de similaridade
         """
         if self.index is None:
-            raise RuntimeError("Índice não construído. Execute construir_indice() primeiro.")
+            raise RuntimeError("Índice não construído. Execute inicializar() primeiro.")
 
         # Embedding da consulta
         query_embedding = self.gerar_embeddings([consulta])
@@ -340,20 +387,6 @@ class MotorRAG:
             tokens_usados += bloco_tokens
 
         return "\n".join(contexto_parts)
-
-    # ─── Pipeline completo ────────────────────────────────────────────────
-
-    def inicializar(self, diretorio_dados: str = "data") -> int:
-        """
-        Pipeline completo: carrega CSVs → prepara documentos → indexa.
-
-        Returns:
-            Número de documentos indexados
-        """
-        df = self.carregar_csvs(diretorio_dados)
-        docs = self.preparar_documentos(df)
-        self.construir_indice(docs)
-        return len(docs)
 
     # ─── Estatísticas ─────────────────────────────────────────────────────
 
