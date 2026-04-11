@@ -67,4 +67,31 @@ if df is not None and not df.empty:
             st.line_chart(df_filtrado['ano'].replace('', pd.NA).dropna().value_counts().sort_index())
 
 else:
-    st.warning("O Catálogo de Acórdãos não foi encontrado! A nuvem tentou baixar do Firebase Storage, mas não conseguiu achar o arquivo. Verifique se você já fez o upload manual do 'catalogo_acordaos.json' e do '.csv' para o Firebase!")
+    st.warning("O Catálogo de Acórdãos não foi encontrado! A nuvem tentou baixar do Firebase Storage, mas não conseguiu achar o arquivo.")
+    
+    st.error("🕵️‍♂️ MODO DE DIAGNÓSTICO ATIVADO:")
+    try:
+        import firebase_admin
+        from firebase_admin import storage
+        import traceback
+        
+        if not firebase_admin._apps:
+            st.write("❌ Firebase App não está inicializado na memória. As variáveis `st.secrets` podem ter falhado.")
+        else:
+            st.success("✅ Conexão com Firebase estabelecida.")
+            bucket = storage.bucket(st.secrets["firebase"]["storageBucket"])
+            
+            st.write(f"📁 Procurando no Bucket: `{bucket.name}`")
+            blobs = list(bucket.list_blobs())
+            if not blobs:
+                st.error("🚨 O Bucket do Firebase está COMPLETAMENTE VAZIO! Você tem certeza que fez o upload?")
+            else:
+                st.write("📌 Arquivos que eu encontrei neste exato momento no seu Firebase Storage:")
+                for b in blobs:
+                    st.code(f"Nome do arquivo: '{b.name}' - Tamanho: {b.size} bytes")
+                
+                st.write("⚠️ Se 'catalogo_acordaos.json' não estiver listado DE FORMA EXATA acima, o sistema NUNCA vai encontrar.")
+                
+    except Exception as e:
+        st.error(f"Erro brutal na conexão com o Firebase: {str(e)}")
+        st.code(traceback.format_exc())
