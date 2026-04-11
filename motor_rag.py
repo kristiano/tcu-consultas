@@ -1,407 +1,155 @@
-"""
-Motor RAG (Retrieval-Augmented Generation) para Acórdãos do TCU.
-
-Responsável por:
-1. Carregar acórdãos de arquivos CSV
-2. Gerar embeddings via OpenAI
-3. Indexar com FAISS para busca vetorial
-4. Recuperar documentos relevantes para o contexto do LLM
-"""
-
-import hashlib
 import os
-import pickle
-from pathlib import Path
-from typing import Optional
-
-import faiss
-import numpy as np
+import json
 import pandas as pd
-import tiktoken
 import streamlit as st
-from sentence_transformers import SentenceTransformer
+from typing import List, Dict, Any
+from google import genai
 import firebase_admin
 from firebase_admin import credentials, storage
 
-# ─── Configurações ────────────────────────────────────────────────────────────
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-EMBEDDING_DIM = 384
-MAX_TOKENS_PER_CHUNK = 500
-CACHE_DIR = Path(".cache")
-DATA_DIR = Path("data")
-
-
-# ─── Funções auxiliares ───────────────────────────────────────────────────────
-
-def contar_tokens(texto: str, modelo: str = "cl100k_base") -> int:
-    """Conta tokens de um texto usando tiktoken."""
-    enc = tiktoken.get_encoding(modelo)
-    return len(enc.encode(texto))
-
-
-def gerar_hash_arquivo(caminho: str) -> str:
-    """Gera hash MD5 do arquivo para invalidação de cache."""
-    h = hashlib.md5()
-    with open(caminho, "rb") as f:
-        for chunk in iter(lambda: f.read(8192), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-# ─── Classe Principal ────────────────────────────────────────────────────────
-
-class MotorRAG:
-    """Motor de Retrieval-Augmented Generation para acórdãos do TCU usando Embeddings locais."""
-
-    def __init__(self):
-        self.index: Optional[faiss.IndexFlatL2] = None
-        self.documentos: list[dict] = []
-        # Lazy loading do modelo de embeddings local para maior eficiência
-        self._embedding_model = None
-        CACHE_DIR.mkdir(exist_ok=True)
-        
-    @property
-    def embedding_model(self):
-        if self._embedding_model is None:
-            self._embedding_model = SentenceTransformer(EMBEDDING_MODEL)
-        return self._embedding_model
-
-    # ─── Firebase Storage ─────────────────────────────────────────────────
+class ReasonerRAG:
+    """Motor de RAG Vectorless usando PageIndex / Árvore lógica"""
     
-    def baixar_do_firebase(self):
-        """Baixa os índices pré-computados (.faiss e .pkl) se configurados no Streamlit Secrets"""
-        if "firebase" not in st.secrets:
-            return False
-            
-        print("🔗 Conectando ao Firebase Storage...")
+    def __init__(self):
+        self.catalogo_path = "catalogo_acordaos.json"
+        self.csv_path = "acordao-completo-2026.csv"
         
+        # Tenta baixar do firebase se não existirem
+        if not os.path.exists(self.catalogo_path) or not os.path.exists(self.csv_path):
+            self.baixar_do_firebase()
+            
+        # Tenta carregar o catálogo localmente
+        if os.path.exists(self.catalogo_path):
+            with open(self.catalogo_path, 'r', encoding='utf-8') as f:
+                self.catalogo = json.load(f)
+        else:
+            self.catalogo = {}
+            print("AVISO: Catálogo de RAG não encontrado localmente.")
+            
+    def baixar_do_firebase(self):
+        print("Buscando base centralizada de arquivos do Firebase Storage...")
         try:
-            # Inicializar firebase_admin se ainda não existir
-            if not firebase_admin._apps:
-                firebase_cred = dict(st.secrets["firebase"])
-                # Arrumar a formatação da private key no json
-                if "private_key" in firebase_cred:
-                    firebase_cred["private_key"] = firebase_cred["private_key"].replace('\\n', '\n')
-                
-                cred = credentials.Certificate(firebase_cred)
-                bucket_name = st.secrets.get("FIREBASE_BUCKET_NAME", "")
-                firebase_admin.initialize_app(cred, {'storageBucket': bucket_name})
+            try:
+                app = firebase_admin.get_app()
+            except ValueError:
+                # Usa os secrets configurados no .streamlit/secrets.toml
+                cred_dict = dict(st.secrets["firebase"])
+                cred_dict["private_key"] = cred_dict["private_key"].replace('\\n', '\n')
+                cred = credentials.Certificate(cred_dict)
+                firebase_admin.initialize_app(cred, {
+                    'storageBucket': 'tcu-app-426ad.appspot.com'
+                })
             
             bucket = storage.bucket()
             
-            for f_name in ["tcu_base.faiss", "tcu_meta.pkl"]:
-                blob = bucket.blob(f_name)
-                if blob.exists():
-                    local_path = CACHE_DIR / f_name
-                    print(f"⬇️ Baixando {f_name} do Firebase...")
-                    blob.download_to_filename(str(local_path))
-                else:
-                    return False
+            for file_name in [self.catalogo_path, self.csv_path]:
+                if not os.path.exists(file_name):
+                    print(f"Baixando {file_name} da nuvem...")
+                    blob = bucket.blob(file_name)
+                    if blob.exists():
+                        blob.download_to_filename(file_name)
+                        print(f"{file_name} baixado com sucesso.")
+                    else:
+                        print(f"O arquivo {file_name} ainda não foi carregado no Firebase pelo administrador.")
+        except Exception as e:
+            print("Erro ao tentar conectar ao Firebase:", e)
             
-            return True
+    def _iniciar_cliente(self, api_key: str, modelo: str):
+        if "gemini" in modelo:
+            return genai.Client(api_key=api_key)
+        raise NotImplementedError("Para o RAG Sem Vetores suportamos por enquanto apenas Google Gemini (Devido à janela de 2M tokens do catálogo)")
+
+    def procurar_acordao_integra(self, lista_chaves: List[str]) -> str:
+        """Puxa o texto completo (100% íntegra) dos acórdãos selecionados pelo LLM"""
+        textos_completos = []
+        if not os.path.exists(self.csv_path):
+            return "CSV bruto não disponível para puxar a íntegra."
+            
+        print(f"Puxando a íntegra das chaves: {lista_chaves} via Python...")
+        try:
+            import csv
+            df = pd.read_csv(self.csv_path, sep='|', quoting=csv.QUOTE_NONE, on_bad_lines='skip', engine='python')
+            df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_').str.replace('ã', 'a').str.replace('ó', 'o')
+            
+            # Filtra pelos acórdãos selecionados
+            for chave in lista_chaves:
+                # Nosso catálogo usa `Num/Ano`
+                pedacos = chave.split('/')
+                num = pedacos[0]
+                ano = pedacos[1] if len(pedacos) > 1 else ""
+                
+                if ano:
+                    linha = df[(df['acordao'] == num) & (df['ano'] == ano) | (df['acordao'] == int(num))]
+                else:
+                    linha = df[df['acordao'] == num]
+                    
+                if not linha.empty:
+                    row = linha.iloc[0]
+                    texto_acordao = f"--- ACÓRDÃO {chave} ---\n"
+                    texto_acordao += f"RELATOR: {row.get('relator', '')}\n"
+                    texto_acordao += f"EMENTA: {row.get('sumario', '')}\n"
+                    texto_acordao += f"DECISÃO COMPLETA: {row.get('acordao_completo', row.get('voto', 'N/A'))}\n"
+                    textos_completos.append(texto_acordao)
+        except Exception as e:
+            print("Erro ao extrair íntegra do CSV:", e)
+            
+        return "\n\n".join(textos_completos)
+
+    def buscar(self, query: str, api_key: str, modelo_escolhido="gemini-2.5-flash", k=3) -> Dict[str, Any]:
+        """Realiza a busca inteligente em 2 etapas"""
+        
+        # Etapa 1: Agente Árvore de Raciocínio lê o catálogo de índices
+        # Limitamos o catálogo para não ultrapassar tokens massivamente de cara se for caro
+        amostra_catalogo = json.dumps(dict(list(self.catalogo.items())[:500]), ensure_ascii=False)
+        
+        prompt_rastreador = f"""
+        Você é um agente especial de tribunal mapeador de processos (Vectorless Reasoning RAG).
+        O Usuário perguntou: "{query}"
+        
+        Aqui está o CATÁLOGO com as chaves e resumos preliminares dos Acórdãos:
+        {amostra_catalogo}
+        
+        Pense passo a passo. Quais são as {k} chaves de processos (ex: "815/2026") que parecem ter a resposta?
+        Responda APENAS com um Array JSON de strings: ["chave1", "chave2"]. Sem marcação markdown ou texto extra.
+        Se não achar nada, retorne [].
+        """
+        
+        client = self._iniciar_cliente(api_key, modelo_escolhido)
+        
+        print("\n[RAG] LLM Lendo o Catálogo offline e estruturando a árvore de busca...")
+        try:
+            resposta_rastreador = client.models.generate_content(
+                model=modelo_escolhido,
+                contents=prompt_rastreador,
+            )
+            raw_text = resposta_rastreador.text.strip().replace('```json', '').replace('```', '').strip()
+            chaves_selecionadas = json.loads(raw_text)
+            
+            # Etapa 2: Recupera a íntegra (não chunkada!) das decisões por Python (O pulo do gato)
+            if not chaves_selecionadas:
+                return {
+                    "documentos": ["Nenhum acórdão compatível encontrado no catálogo inicial."],
+                    "prompt_final": f"Usuário perguntou: {query}\n\nNenhuma base de apoio localizada.",
+                    "ids": []
+                }
+                
+            texto_base = self.procurar_acordao_integra(chaves_selecionadas)
+            
+            prompt_final = f"""
+Responda à pergunta "{query}".
+Baseie-se 100% na íntegra dos seguintes acórdãos que você selecionou para leitura profuda:
+{texto_base[:60000]}
+"""
+            
+            return {
+                "documentos": ["Acórdãos recuperados em íntegra na memória do modelo"],
+                "prompt_final": prompt_final,
+                "ids": chaves_selecionadas
+            }
             
         except Exception as e:
-            print(f"⚠️ Aviso ignorado: Falha no Firebase -> {e}")
-            return False
-
-    # ─── Carregamento de dados ────────────────────────────────────────────
-
-    def carregar_csvs(self, diretorio: str = "data") -> pd.DataFrame:
-        """
-        Carrega todos os CSVs de um diretório e consolida em um DataFrame.
-        """
-        dfs = []
-        dir_path = Path(diretorio)
-        csv_files = []
-
-        if dir_path.exists():
-            csv_files = list(dir_path.glob("*.csv"))
-
-        # Se não achou na pasta data, tenta na pasta raiz
-        if not csv_files:
-            csv_files = list(Path(".").glob("*.csv"))
-
-        if not csv_files:
-            raise FileNotFoundError(
-                f"Nenhum arquivo CSV encontrado na pasta '{diretorio}' ou na raiz do projeto."
-            )
-
-        for csv_file in csv_files:
-            try:
-                # Tentar UTF-8, cair para latin1 se falhar
-                try:
-                    df = pd.read_csv(csv_file, encoding="utf-8", dtype=str, on_bad_lines="warn")
-                except UnicodeDecodeError:
-                    df = pd.read_csv(csv_file, encoding="latin1", dtype=str, on_bad_lines="warn")
-                except Exception:
-                    df = pd.read_csv(csv_file, encoding="utf-8", dtype=str, on_bad_lines="skip")
-                    
-                df = df.fillna("")
-                
-                # Normalizar colunas do Kaggle/Tcu dataset para os nomes internos
-                col_map = {}
-                for col in df.columns:
-                    col_lower = col.strip().lower()
-                    if "título" in col_lower or "t¿tulo" in col_lower or "ttulo" in col_lower:
-                        col_map[col] = "tituloAcordao"
-                    elif "data" in col_lower:
-                        col_map[col] = "dtSessao"
-                    elif "relator" in col_lower:
-                        col_map[col] = "relator"
-                    elif "sumário" in col_lower or "sum¿rio" in col_lower or "sumrio" in col_lower:
-                        col_map[col] = "sumario"
-                    elif "tipo de processo" in col_lower:
-                        col_map[col] = "tipoProcesso"
-                    elif "processo" in col_lower and "tipo" not in col_lower:
-                        col_map[col] = "numProc"
-                    elif "assunto" in col_lower:
-                        col_map[col] = "assunto"
-                    elif "entidade" in col_lower:
-                        col_map[col] = "entidade"
-                
-                df = df.rename(columns=col_map)
-                dfs.append(df)
-            except Exception as e:
-                print(f"⚠️ Erro ao carregar {csv_file}: {e}")
-
-        if not dfs:
-            raise ValueError("Nenhum CSV carregado com sucesso.")
-
-        df_completo = pd.concat(dfs, ignore_index=True)
-        return df_completo
-
-    # ─── Preparação de documentos ─────────────────────────────────────────
-
-    def preparar_documentos(self, df: pd.DataFrame) -> list[dict]:
-        """
-        Transforma cada acórdão em um documento com texto combinado
-        para geração de embedding.
-        """
-        documentos = []
-
-        for _, row in df.iterrows():
-            # Montar texto rico para embedding semântico
-            partes = []
-
-            # Identificação
-            titulo = row.get("tituloAcordao", "")
-            num = row.get("numAcordao", "")
-            ano = row.get("anoAcordao", "")
-            colegiado = row.get("colegiado", "")
-            
-            titulo_final = titulo if titulo else f"Acórdão {num}/{ano} - {colegiado}"
-            partes.append(titulo_final)
-
-            # Metadados
-            for campo, label in [
-                ("relator", "Relator"),
-                ("tipoProcesso", "Tipo de Processo"),
-                ("assunto", "Assunto"),
-                ("entidade", "Entidade"),
-            ]:
-                valor = row.get(campo, "")
-                if valor:
-                    partes.append(f"{label}: {valor}")
-
-            # Conteúdo principal
-            sumario = row.get("sumario", "")
-            if sumario:
-                partes.append(f"Sumário: {sumario}")
-
-            acordao_texto = row.get("acordao", "")
-            if acordao_texto:
-                partes.append(f"Decisão: {acordao_texto}")
-
-            texto_completo = "\n".join(partes)
-
-            # Truncar se necessário
-            if contar_tokens(texto_completo) > MAX_TOKENS_PER_CHUNK:
-                enc = tiktoken.get_encoding("cl100k_base")
-                tokens = enc.encode(texto_completo)[:MAX_TOKENS_PER_CHUNK]
-                texto_completo = enc.decode(tokens)
-
-            # Extrair ano para estatísticas, se possível, a partir da Título
-            ano_ext = ano
-            if not ano_ext and titulo:
-                # Tentar encontrar /20NN
-                import re
-                match = re.search(r'/(\d{4})', titulo)
-                if match:
-                    ano_ext = match.group(1)
-
-            doc = {
-                "texto": texto_completo,
-                "metadados": {
-                    "num_acordao": num,
-                    "ano": ano_ext,
-                    "colegiado": colegiado,
-                    "relator": row.get("relator", ""),
-                    "tipo_processo": row.get("tipoProcesso", ""),
-                    "assunto": row.get("assunto", ""),
-                    "sumario": sumario,
-                    "acordao": acordao_texto,
-                    "entidade": row.get("entidade", ""),
-                    "data_sessao": row.get("dtSessao", ""),
-                    "processo": row.get("numProc", ""),
-                    "titulo": titulo_final,
-                },
+            return {
+                "documentos": [f"Erro na busca sintática: {str(e)}"],
+                "prompt_final": query,
+                "ids": []
             }
-            documentos.append(doc)
-
-        self.documentos = documentos
-        return documentos
-
-    # ─── Embeddings ───────────────────────────────────────────────────────
-
-    def gerar_embeddings(self, textos: list[str], batch_size: int = 32) -> np.ndarray:
-        """
-        Gera embeddings dos textos usando modelo local em lotes.
-        """
-        textos = [t if t.strip() else "sem conteúdo" for t in textos]
-        
-        # Gerar os embeddings usando batching eficiente da biblioteca
-        embeddings = self.embedding_model.encode(
-            textos, 
-            batch_size=batch_size,
-            show_progress_bar=True,
-            convert_to_numpy=True
-        )
-        
-        return embeddings.astype("float32")
-
-    # ─── Indexação FAISS ──────────────────────────────────────────────────
-
-    def carregar_indice_pronto(self) -> bool:
-        """Tenta abrir um FAISS index e um PKL de metadados se já estiverem na pasta."""
-        faiss_path = CACHE_DIR / "tcu_base.faiss"
-        pkl_path = CACHE_DIR / "tcu_meta.pkl"
-        
-        # Tenta baixar da nuvem primeiro caso configurado, e se ainda não existe
-        if not faiss_path.exists() or not pkl_path.exists():
-            self.baixar_do_firebase()
-            
-        if faiss_path.exists() and pkl_path.exists():
-            print("📦 Carregando Base Otimizada do Disco (Offline/Firebase)")
-            self.index = faiss.read_index(str(faiss_path))
-            with open(pkl_path, "rb") as f:
-                self.documentos = pickle.load(f)
-            return True
-            
-        return False
-
-    def inicializar(self) -> int:
-        """
-        Inicia a base.
-        Ordem de tentativa:
-        1. Base Offline / Firebase (.faiss e .pkl) prontas.
-        2. Ler CSV localmente caso .faiss não exista.
-        """
-        if self.carregar_indice_pronto():
-            return len(self.documentos)
-            
-        print("📁 Base pronta não encontrada. Buscando arquivos '.csv' para fallback...")
-        df = self.carregar_csvs()
-        
-        # Gera o hash baseado no dataframe atual
-        hash_atual = hashlib.md5(pd.util.hash_pandas_object(df).values).hexdigest()
-        arquivo_index = CACHE_DIR / f"base_{hash_atual}.index"
-        arquivo_docs = CACHE_DIR / f"base_{hash_atual}.pkl"
-
-        if arquivo_index.exists() and arquivo_docs.exists():
-            print("📦 Carregando Base do Cache Antigo de CSV")
-            self.index = faiss.read_index(str(arquivo_index))
-            with open(arquivo_docs, "rb") as f:
-                self.documentos = pickle.load(f)
-        else:
-            print(f"Processando {len(df)} linha(s). Isso pode ser muito lento para big data na nuvem.")
-            self.documentos = self.preparar_documentos(df)
-            
-            textos_para_vetorizar = [doc["texto"] for doc in self.documentos]
-            vetores = self.gerar_embeddings(textos_para_vetorizar)
-
-            self.index = faiss.IndexFlatL2(EMBEDDING_DIM)
-            self.index.add(vetores)
-
-            # Salvar cache
-            faiss.write_index(self.index, str(arquivo_index))
-            with open(arquivo_docs, "wb") as f:
-                pickle.dump(self.documentos, f)
-
-        return len(self.documentos)
-
-    # ─── Busca semântica ──────────────────────────────────────────────────
-
-    def buscar(self, consulta: str, top_k: int = 5) -> list[dict]:
-        """
-        Realiza busca semântica no índice FAISS.
-        """
-        if self.index is None:
-            raise RuntimeError("Índice não construído. Execute inicializar() primeiro.")
-
-        # Embedding da consulta
-        query_embedding = self.gerar_embeddings([consulta])
-
-        # Busca no FAISS
-        distances, indices = self.index.search(query_embedding, top_k)
-
-        resultados = []
-        for dist, idx in zip(distances[0], indices[0]):
-            if idx < len(self.documentos):
-                doc = self.documentos[idx].copy()
-                doc["score"] = float(dist)
-                resultados.append(doc)
-
-        return resultados
-
-    # ─── Montagem de contexto para o LLM ──────────────────────────────────
-
-    def montar_contexto(self, resultados: list[dict], max_tokens: int = 3000) -> str:
-        """
-        Monta o contexto RAG a partir dos resultados da busca
-        para enviar ao LLM.
-        """
-        contexto_parts = []
-        tokens_usados = 0
-
-        for i, doc in enumerate(resultados, 1):
-            meta = doc["metadados"]
-            bloco = f"""
-═══ Acórdão {i} ═══
-📋 Identificação: {meta.get('titulo', 'N/A')}
-👤 Relator: {meta.get('relator', 'N/A')}
-📁 Processo: {meta.get('processo', 'N/A')}
-📂 Tipo: {meta.get('tipo_processo', 'N/A')}
-📅 Data Sessão: {meta.get('data_sessao', 'N/A')}
-🏢 Entidade: {meta.get('entidade', 'N/A')}
-📝 Assunto: {meta.get('assunto', 'N/A')}
-
-📄 Sumário:
-{meta.get('sumario', 'Não disponível')}
-"""
-            if meta.get('acordao'):
-                bloco += f"\n⚖️ Decisão:\n{meta.get('acordao')}\n"
-            bloco_tokens = contar_tokens(bloco)
-            if tokens_usados + bloco_tokens > max_tokens:
-                break
-            contexto_parts.append(bloco)
-            tokens_usados += bloco_tokens
-
-        return "\n".join(contexto_parts)
-
-    # ─── Estatísticas ─────────────────────────────────────────────────────
-
-    def estatisticas(self) -> dict:
-        """Retorna estatísticas da base indexada."""
-        if not self.documentos:
-            return {"total": 0}
-
-        anos = [d["metadados"].get("ano", "") for d in self.documentos if d["metadados"].get("ano")]
-        colegiados = [d["metadados"].get("colegiado", "") for d in self.documentos if d["metadados"].get("colegiado")]
-        relatores = [d["metadados"].get("relator", "") for d in self.documentos if d["metadados"].get("relator")]
-
-        return {
-            "total": len(self.documentos),
-            "anos": sorted(set(anos)),
-            "colegiados": sorted(set(colegiados)),
-            "total_relatores": len(set(relatores)),
-        }

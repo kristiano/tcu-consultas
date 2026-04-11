@@ -6,7 +6,7 @@ import anthropic
 from google import genai
 from openai import OpenAI
 
-from motor_rag import MotorRAG
+from motor_rag import ReasonerRAG
 
 with st.sidebar:
     st.title("🏛️ TCU Search")
@@ -48,13 +48,10 @@ st.caption("🚀 Uma pesquisa de acórdãos TCU alimentada por IA e RAG local")
 @st.cache_resource
 def inicializar_rag():
     try:
-        motor = MotorRAG()
-        motor.inicializar()
+        motor = ReasonerRAG()
         return motor
-    except FileNotFoundError as e:
-        return None
     except Exception as e:
-        st.error(f"Erro ao inicializar RAG: {e}")
+        st.error(f"Erro ao inicializar RAG Vectorless: {e}")
         return None
 
 motor = inicializar_rag()
@@ -80,16 +77,16 @@ if prompt := st.chat_input():
     with st.chat_message("assistant"):
         # Buscar acórdãos (RAG)
         contexto = ""
-        resultados = motor.buscar(prompt, top_k=top_k)
-        if resultados:
-            contexto = motor.montar_contexto(resultados)
-            with st.expander(f"📚 Ver {len(resultados)} acórdão(s) base recuperados"):
-                for doc in resultados:
-                    meta = doc["metadados"]
-                    st.markdown(f"**Acórdão {meta.get('num_acordao', '?')}/{meta.get('ano', '?')}**")
-                    st.markdown(f"*Relator: {meta.get('relator', 'N/A')}* | *Assunto: {meta.get('assunto', 'N/A')}*")
-                    st.text(meta.get('sumario', 'Sem sumário')[:200] + "...")
-                    st.divider()
+        resultados = None
+        if llm_api_key:
+            resultados = motor.buscar(prompt, api_key=llm_api_key, modelo_escolhido=modelo_llm, k=top_k)
+            
+        if resultados and "prompt_final" in resultados:
+            contexto = resultados["prompt_final"]
+            with st.expander(f"📚 Ver acórdãos íntegras pescados pela IA"):
+                st.markdown(f"**Chaves selecionadas: {resultados.get('ids', [])}**")
+                st.text("A IA Leu o catálogo offline em Python e extraiu na íntegra esses processos para responder!")
+                st.divider()
 
         # Preparar chamadas do LLM    
         SYSTEM_PROMPT = "Você é um assistente configurado para analisar acórdãos do TCU. Responda baseado prioritariamente no contexto fornecido. Se não houver contexto, seja claro quanto a isso. Responda em português."
@@ -107,7 +104,7 @@ if prompt := st.chat_input():
                 client = OpenAI(api_key=llm_api_key)
                 msgs = [
                     {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "system", "content": f"CONTEXTO DOS ACÓRDÃOS:\n{contexto}"}
+                    {"role": "user", "content": f"Use esta base de conhecimento para responder: {contexto}"}
                 ] + mensagens_historico
                 
                 response = client.chat.completions.create(model=modelo_llm, messages=msgs, temperature=0.3)
@@ -137,6 +134,7 @@ if prompt := st.chat_input():
                     prompt_completo += f"{msg['role'].upper()}: {msg['content']}\n"
                 
                 prompt_completo += f"\nUsuário: {prompt}\nSua Resposta:"
+                prompt_completo += f"\n\nBase material para ler (Se houver): {contexto}"
                 
                 response = client.models.generate_content(
                     model=modelo_llm,

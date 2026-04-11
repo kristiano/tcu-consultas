@@ -12,3 +12,8 @@ tiktoken
 numpy
 requests
 firebase-admin
+litellm>=1.40.0
+pymupdf
+PyPDF2
+python-dotenv
+pyyaml
