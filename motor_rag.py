@@ -55,9 +55,16 @@ class ReasonerRAG:
             print("Erro ao tentar conectar ao Firebase:", e)
             
     def _iniciar_cliente(self, api_key: str, modelo: str):
-        if "gemini" in modelo:
-            return genai.Client(api_key=api_key)
-        raise NotImplementedError("Para o RAG Sem Vetores suportamos por enquanto apenas Google Gemini (Devido à janela de 2M tokens do catálogo)")
+        if "gemini" in modelo.lower():
+            return {"provider": "google", "client": genai.Client(api_key=api_key)}
+        elif "gpt" in modelo.lower():
+            from openai import OpenAI
+            return {"provider": "openai", "client": OpenAI(api_key=api_key)}
+        elif "claude" in modelo.lower():
+            import anthropic
+            return {"provider": "anthropic", "client": anthropic.Anthropic(api_key=api_key)}
+        else:
+            raise ValueError(f"Modelo desconhecido para RAG: {modelo}")
 
     def procurar_acordao_integra(self, lista_chaves: List[str]) -> str:
         """Puxa o texto completo (100% íntegra) dos acórdãos selecionados pelo LLM"""
@@ -114,16 +121,44 @@ class ReasonerRAG:
         Se não achar nada, retorne [].
         """
         
-        client = self._iniciar_cliente(api_key, modelo_escolhido)
+        client_info = self._iniciar_cliente(api_key, modelo_escolhido)
+        provider = client_info["provider"]
+        client = client_info["client"]
         
-        print("\n[RAG] LLM Lendo o Catálogo offline e estruturando a árvore de busca...")
+        print(f"\n[RAG] {provider.upper()} Lendo o Catálogo offline e estruturando a árvore de busca...")
         try:
-            resposta_rastreador = client.models.generate_content(
-                model=modelo_escolhido,
-                contents=prompt_rastreador,
-            )
-            raw_text = resposta_rastreador.text.strip().replace('```json', '').replace('```', '').strip()
-            chaves_selecionadas = json.loads(raw_text)
+            if provider == "google":
+                resposta = client.models.generate_content(
+                    model=modelo_escolhido,
+                    contents=prompt_rastreador,
+                )
+                raw_text = resposta.text
+            elif provider == "openai":
+                resposta = client.chat.completions.create(
+                    model=modelo_escolhido,
+                    messages=[{"role": "user", "content": prompt_rastreador}],
+                    temperature=0.1
+                )
+                raw_text = resposta.choices[0].message.content
+            elif provider == "anthropic":
+                resposta = client.messages.create(
+                    model=modelo_escolhido,
+                    messages=[{"role": "user", "content": prompt_rastreador}],
+                    max_tokens=1000,
+                    temperature=0.1
+                )
+                raw_text = resposta.content[0].text
+
+            # Extração segura de JSON ignorando baboseiras da IA
+            import re
+            match = re.search(r'\[.*\]', raw_text.strip().replace('\n', ''), re.DOTALL)
+            if match:
+                chaves_selecionadas = json.loads(match.group(0))
+            else:
+                try:
+                    chaves_selecionadas = json.loads(raw_text.strip().replace('```json', '').replace('```', '').strip())
+                except:
+                    chaves_selecionadas = []
             
             # Etapa 2: Recupera a íntegra (não chunkada!) das decisões por Python (O pulo do gato)
             if not chaves_selecionadas:
