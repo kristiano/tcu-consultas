@@ -37,10 +37,12 @@ class ReasonerRAG:
                 cred_dict["private_key"] = cred_dict["private_key"].replace('\\n', '\n')
                 cred = credentials.Certificate(cred_dict)
                 firebase_admin.initialize_app(cred, {
-                    'storageBucket': 'tcu-app-426ad.appspot.com'
+                    'storageBucket': cred_dict.get('storageBucket', 'tcu-consultas.firebasestorage.app')
                 })
             
-            bucket = storage.bucket()
+            # Se for pegar o default (sem parametro), usara o inicializado. Para garantir:
+            storage_bucket_name = dict(st.secrets["firebase"]).get("storageBucket", "tcu-consultas.firebasestorage.app")
+            bucket = storage.bucket(storage_bucket_name)
             
             for file_name in [self.catalogo_path, self.csv_path]:
                 if not os.path.exists(file_name):
