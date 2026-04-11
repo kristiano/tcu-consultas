@@ -33,7 +33,7 @@ with st.sidebar:
     elif "Anthropic" in provedor:
         modelos = ["claude-3-5-sonnet-20240620", "claude-3-opus-20240229", "claude-3-haiku-20240307"]
     else:
-        modelos = ["gemini-1.5-flash-latest", "gemini-1.5-pro-latest", "gemini-2.0-flash-exp"]
+        modelos = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.5-flash-8b", "gemini-1.5-pro-002"]
 
     modelo_llm = st.selectbox("Modelo", modelos, index=0)
     top_k = st.slider("Resultados por busca", 1, 15, 5)
