@@ -75,7 +75,7 @@ class ReasonerRAG:
         print(f"Puxando a íntegra das chaves: {lista_chaves} via Python...")
         try:
             import csv
-            df = pd.read_csv(self.csv_path, sep='|', quoting=csv.QUOTE_NONE, on_bad_lines='skip', engine='python')
+            df = pd.read_csv(self.csv_path, sep=',', quoting=csv.QUOTE_MINIMAL, on_bad_lines='skip', engine='python')
             df.columns = df.columns.str.strip().str.replace('"', '').str.lower().str.replace(' ', '_').str.replace('ã', 'a').str.replace('ó', 'o')
             
             # Filtra pelos acórdãos selecionados

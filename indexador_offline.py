@@ -24,7 +24,7 @@ def criar_catalogo_para_rag_sem_vetor(csv_path, output_json="catalogo_acordaos.j
     try:
         # Usa python engine e quote_none para lidar com as aspas sujas do CSV do TCU
         import csv
-        df = pd.read_csv(csv_path, sep='|', quoting=csv.QUOTE_NONE, on_bad_lines='skip', engine='python')
+        df = pd.read_csv(csv_path, sep=',', quoting=csv.QUOTE_MINIMAL, on_bad_lines='skip', engine='python')
     except Exception as e:
         print(f"Erro ao ler CSV: {e}")
         return False

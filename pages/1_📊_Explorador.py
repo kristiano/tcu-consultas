@@ -67,4 +67,4 @@ if df is not None and not df.empty:
             st.line_chart(df_filtrado['ano'].replace('', pd.NA).dropna().value_counts().sort_index())
 
 else:
-    st.warning("Nenhuma base vetorial indexada encontrada. Certifique-se de que o Motor RAG foi inicializado e/ou o Firebase está configurado.")
+    st.warning("O Catálogo de Acórdãos não foi encontrado! A nuvem tentou baixar do Firebase Storage, mas não conseguiu achar o arquivo. Verifique se você já fez o upload manual do 'catalogo_acordaos.json' e do '.csv' para o Firebase!")
