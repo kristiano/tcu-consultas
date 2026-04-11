@@ -99,8 +99,8 @@ class ReasonerRAG:
         """Realiza a busca inteligente em 2 etapas"""
         
         # Etapa 1: Agente Árvore de Raciocínio lê o catálogo de índices
-        # Limitamos o catálogo para não ultrapassar tokens massivamente de cara se for caro
-        amostra_catalogo = json.dumps(dict(list(self.catalogo.items())[:500]), ensure_ascii=False)
+        # Envia o catálogo inteiro. O Gemini tem até 2 Milhões de tokens de janela!
+        amostra_catalogo = json.dumps(self.catalogo, ensure_ascii=False)
         
         prompt_rastreador = f"""
         Você é um agente especial de tribunal mapeador de processos (Vectorless Reasoning RAG).
