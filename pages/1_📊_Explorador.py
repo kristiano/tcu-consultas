@@ -86,11 +86,28 @@ else:
             if not blobs:
                 st.error("🚨 O Bucket do Firebase está COMPLETAMENTE VAZIO! Você tem certeza que fez o upload?")
             else:
-                st.write("📌 Arquivos que eu encontrei neste exato momento no seu Firebase Storage:")
+                st.write("📌 Arquivos detectados com sucesso no Firebase Storage:")
                 for b in blobs:
                     st.code(f"Nome do arquivo: '{b.name}' - Tamanho: {b.size} bytes")
                 
-                st.write("⚠️ Se 'catalogo_acordaos.json' não estiver listado DE FORMA EXATA acima, o sistema NUNCA vai encontrar.")
+                st.write("⏳ Tentando baixar o catálogo (600kb) para a memória do servidor agora mesmo...")
+                try:
+                    blob = bucket.blob("catalogo_acordaos.json")
+                    blob.download_to_filename("catalogo_acordaos.json")
+                    import os
+                    if os.path.exists("catalogo_acordaos.json"):
+                        st.success("🎉 O DOWNLOAD FUNCIONOU PERFEITAMENTE! Mas o motor_rag não está lendo. Problema lógico de caminho.")
+                        
+                        st.write("Checando a leitura do arquivo no Python:")
+                        import json
+                        with open("catalogo_acordaos.json", "r", encoding="utf-8") as f:
+                            teste_json = json.load(f)
+                            st.write(f"Consegui ler {len(teste_json)} itens no JSON baixado!")
+                    else:
+                        st.error("O comando de download funcionou, mas o arquivo não apareceu no diretório!")
+                except Exception as ex:
+                    st.error(f"💥 ERRO NA HORA DO DOWNLOAD! O acesso ao arquivo está bloqueado/corrompido: {str(ex)}")
+                    st.code(traceback.format_exc())
                 
     except Exception as e:
         st.error(f"Erro brutal na conexão com o Firebase: {str(e)}")
