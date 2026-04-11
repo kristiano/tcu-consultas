@@ -150,3 +150,10 @@ if prompt := st.chat_input():
             
         except Exception as e:
             st.error(f"Erro ao gerar resposta ({provedor.split(' ')[0]}): {e}")
+            if "NOT_FOUND" in str(e) and "Google" in provedor:
+                try:
+                    client = genai.Client(api_key=llm_api_key)
+                    disponiveis = [m.name for m in client.models.list()]
+                    st.warning(f"Sua chave de API só tem acesso aos seguintes modelos: {disponiveis}")
+                except Exception as ex:
+                    st.error(f"Não foi possível listar os modelos da sua chave: {ex}")
