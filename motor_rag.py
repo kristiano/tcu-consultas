@@ -12,7 +12,7 @@ class ReasonerRAG:
     
     def __init__(self):
         self.catalogo_path = "catalogo_acordaos.json"
-        self.csv_path = "acordao-completo-2026.csv"
+        self.csv_path = "acordao2026-limpo.csv"
         
         # Tenta baixar do firebase se não existirem
         if not os.path.exists(self.catalogo_path) or not os.path.exists(self.csv_path):
@@ -69,7 +69,7 @@ class ReasonerRAG:
         try:
             import csv
             df = pd.read_csv(self.csv_path, sep='|', quoting=csv.QUOTE_NONE, on_bad_lines='skip', engine='python')
-            df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_').str.replace('ã', 'a').str.replace('ó', 'o')
+            df.columns = df.columns.str.strip().str.replace('"', '').str.lower().str.replace(' ', '_').str.replace('ã', 'a').str.replace('ó', 'o')
             
             # Filtra pelos acórdãos selecionados
             for chave in lista_chaves:
@@ -79,16 +79,16 @@ class ReasonerRAG:
                 ano = pedacos[1] if len(pedacos) > 1 else ""
                 
                 if ano:
-                    linha = df[(df['acordao'] == num) & (df['ano'] == ano) | (df['acordao'] == int(num))]
+                    linha = df[(df['numacordao'].astype(str) == num) & (df['anoacordao'].astype(str) == ano)]
                 else:
-                    linha = df[df['acordao'] == num]
+                    linha = df[df['numacordao'].astype(str) == num]
                     
                 if not linha.empty:
                     row = linha.iloc[0]
                     texto_acordao = f"--- ACÓRDÃO {chave} ---\n"
-                    texto_acordao += f"RELATOR: {row.get('relator', '')}\n"
-                    texto_acordao += f"EMENTA: {row.get('sumario', '')}\n"
-                    texto_acordao += f"DECISÃO COMPLETA: {row.get('acordao_completo', row.get('voto', 'N/A'))}\n"
+                    texto_acordao += f"RELATOR: {str(row.get('relator', '')).replace('\"','')}\n"
+                    texto_acordao += f"EMENTA: {str(row.get('sumario', '')).replace('\"','')}\n"
+                    texto_acordao += f"DECISÃO COMPLETA: {str(row.get('acordao', row.get('voto', 'N/A'))).replace('\"','')}\n"
                     textos_completos.append(texto_acordao)
         except Exception as e:
             print("Erro ao extrair íntegra do CSV:", e)

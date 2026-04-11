@@ -29,15 +29,15 @@ def criar_catalogo_para_rag_sem_vetor(csv_path, output_json="catalogo_acordaos.j
         print(f"Erro ao ler CSV: {e}")
         return False
         
-    df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_').str.replace('ã', 'a').str.replace('ó', 'o')
+    df.columns = df.columns.str.strip().str.replace('"', '').str.lower().str.replace(' ', '_').str.replace('ã', 'a').str.replace('ó', 'o')
     
     catalogo = {}
     print("Construindo índice estruturado puramente em Python (Zero custo de tokens)...")
     
     for idx, row in df.iterrows():
         try:
-            num = str(row.get("acordao", row.get("numero", row.get("num_acordao", f"ID_{idx}")))).replace('"', '')
-            ano = str(row.get("ano", row.get("ano_acordao", ""))).replace('"', '')
+            num = str(row.get("numacordao", row.get("acordao", f"ID_{idx}"))).replace('"', '')
+            ano = str(row.get("anoacordao", row.get("ano", ""))).replace('"', '')
             chave = f"{num}/{ano}" if ano.strip() else f"ID_{idx}"
             
             # Limpa lixos HTML
@@ -82,7 +82,7 @@ def upload_to_firebase(filename):
     print(f"✅ Arquivo {filename} carregado no Firebase!")
 
 if __name__ == "__main__":
-    csv_file = "acordao-completo-2026.csv"
+    csv_file = "acordao2026-limpo.csv"
     json_file = "catalogo_acordaos.json"
     
     sucesso = criar_catalogo_para_rag_sem_vetor(csv_file, json_file)
